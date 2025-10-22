@@ -47,4 +47,3 @@ Distribuito sotto licenza MIT — puoi modificare, ridistribuire e utilizzare li
 ❤️ Autore
 
 Progetto creato con passione da Luke
-💡 “Un Pico W, un po’ di Python e tanta curiosità.”
