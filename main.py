@@ -53,6 +53,40 @@ AUTH = {
     "HEALTH_PUBLIC_TOKEN": "",
 }
 
+# ---- Persistenza impostazioni runtime ----
+CONFIG_FILE = "config.json"
+
+def load_runtime_config():
+    try:
+        if CONFIG_FILE in os.listdir():
+            with open(CONFIG_FILE, "r") as f:
+                data = json.load(f)
+            # Solo i tre parametri esposti in UI
+            ci = int(data.get("CHECK_INTERVAL", CONFIG["CHECK_INTERVAL"]))
+            up = int(data.get("UP_THRESHOLD",   CONFIG["UP_THRESHOLD"]))
+            dn = int(data.get("DOWN_THRESHOLD", CONFIG["DOWN_THRESHOLD"]))
+            # Validazione minima
+            CONFIG["CHECK_INTERVAL"] = max(5, min(ci, 3600))
+            CONFIG["UP_THRESHOLD"]   = max(1, min(up, 10))
+            CONFIG["DOWN_THRESHOLD"] = max(1, min(dn, 10))
+            print("[CFG] runtime loaded:", CONFIG["CHECK_INTERVAL"], CONFIG["UP_THRESHOLD"], CONFIG["DOWN_THRESHOLD"])
+    except Exception as e:
+        print("[CFG] load error:", repr(e))
+
+def save_runtime_config():
+    try:
+        data = {
+            "CHECK_INTERVAL": CONFIG["CHECK_INTERVAL"],
+            "UP_THRESHOLD":   CONFIG["UP_THRESHOLD"],
+            "DOWN_THRESHOLD": CONFIG["DOWN_THRESHOLD"],
+        }
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(data, f)
+        return True
+    except Exception as e:
+        print("[CFG] save error:", repr(e))
+        return False
+
 # =======================
 # ====== TARGET IO ======
 # =======================
@@ -462,6 +496,22 @@ input,select{{padding:6px;margin:4px 0;min-width:220px;}}
 </fieldset>
 
 <p class="small">Health: <a href="/health">/health</a> (aggiungi <code>?json=1</code>{token_hint}).</p>
+<fieldset>
+<legend>Impostazioni</legend>
+<form action="/set" method="get">
+  <label>Intervallo polling (s)<br>
+    <input type="number" name="ci" min="5" max="3600" value="{ci}">
+  </label><br>
+  <label>Soglia UP (n. esiti OK consecutivi)<br>
+    <input type="number" name="up" min="1" max="10" value="{up}">
+  </label><br>
+  <label>Soglia DOWN (n. esiti KO consecutivi)<br>
+    <input type="number" name="dn" min="1" max="10" value="{dn}">
+  </label><br>
+  <button class="btn" type="submit">Salva</button>
+</form>
+<p class="small">Valori consigliati: intervallo 15–60s, soglie 1–3.</p>
+</fieldset>
 
 <script>
 function onModeChange(v){{     // << raddoppia graffe
@@ -472,7 +522,8 @@ function onModeChange(v){{     // << raddoppia graffe
 </script>
 
 </body></html>
-""".format(flash=flash_html, rows="\n".join(rows), token_hint=token_hint)
+""".format(flash=flash_html, rows="\n".join(rows), token_hint=token_hint,
+           ci=CONFIG["CHECK_INTERVAL"], up=CONFIG["UP_THRESHOLD"], dn=CONFIG["DOWN_THRESHOLD"])
 
 
     return html
@@ -651,6 +702,26 @@ def serve_once(targets, states, uptime_start_ms):
             else:
                 flash = "Modo non valido."
             http_response(conn, body=render_page(targets, states, flash))
+        elif path == "/set":
+            # Lettura parametri e validazione
+            try:
+                ci = int(params.get("ci","") or CONFIG["CHECK_INTERVAL"])
+                up = int(params.get("up","") or CONFIG["UP_THRESHOLD"])
+                dn = int(params.get("dn","") or CONFIG["DOWN_THRESHOLD"])
+            except:
+                ci, up, dn = CONFIG["CHECK_INTERVAL"], CONFIG["UP_THRESHOLD"], CONFIG["DOWN_THRESHOLD"]
+
+            ci = max(5, min(ci, 3600))
+            up = max(1, min(up, 10))
+            dn = max(1, min(dn, 10))
+
+            CONFIG["CHECK_INTERVAL"] = ci
+            CONFIG["UP_THRESHOLD"]   = up
+            CONFIG["DOWN_THRESHOLD"] = dn
+            save_runtime_config()
+
+            flash = "Impostazioni salvate: intervallo {}s, soglie UP={}, DOWN={}.".format(ci, up, dn)
+            http_response(conn, body=render_page(targets, states, flash))
         elif path == "/del":
             i = int(params.get("i","-1") or "-1")
             if 0 <= i < len(targets):
@@ -703,6 +774,8 @@ def main():
     print("[PicoUptime] starting...")
     while not wifi_connect(CONFIG["WIFI_SSID"], CONFIG["WIFI_PASSWORD"]):
         time.sleep(3)
+    
+    load_runtime_config()  # <-- carica config (se presente)
 
     targets = load_targets()
     states = [{"status": None, "oks": 0, "fails": 0, "last_code": None} for _ in targets]
@@ -729,6 +802,7 @@ def main():
         targets, states = serve_once(targets, states, uptime_start_ms)
 
         now = time.ticks_ms()
+        interval_ms = CONFIG["CHECK_INTERVAL"] * 1000  # <-- ricalcola ad ogni giro
         if time.ticks_diff(now, last_check_ms) >= interval_ms:
             last_check_ms = now
             if len(states) != len(targets):
@@ -778,4 +852,3 @@ except Exception as e:
         pass
     time.sleep(2)
     machine.reset()
-
